@@ -1,19 +1,16 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_lcd_panel_ops.h"
 #include "tca9554.h"
 #include "lcd_board.h"
 
 #define LED_RED_NUM                 TCA9554_GPIO_NUM_6     // 红色 LED 对应tca9554引脚6
 #define LED_BLUE_NUM                TCA9554_GPIO_NUM_7     // 蓝色 LED 对应tca9554引脚7
 
-#define LCD_H_RES                   320
-#define LCD_V_RES                   240
+#define LCD_WIDTH   320
+#define LCD_HEIGHT  240
 
-/* 全局 LCD 面板句柄 */
-static esp_lcd_panel_handle_t s_lcd_panel = NULL;
-
+static esp_lcd_panel_handle_t lcd_panel;
 
 void blue_led(void *param)
 {
@@ -37,36 +34,63 @@ void red_led(void *param)
     }
 }
 
-
-
-void app_main(void)
+static void lcd_test(void *param)
 {
-    /* ── 初始化 TCA9554 ── */
-    ESP_LOGI("main", "Initializing TCA9554");
-    ESP_ERROR_CHECK(tca9554_init());
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-    /* ── 初始化 LCD ── */
-    ESP_LOGI("main", "Initializing LCD");
-    ESP_ERROR_CHECK(lcd_board_init(&s_lcd_panel));
+    uint16_t colors[] = { 0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000 };
+    int color_count = sizeof(colors) / sizeof(colors[0]);
+    int idx = 0;
 
-    /* ── LCD 填充测试 (红色) ── */
-    uint16_t *fb = heap_caps_malloc(LCD_H_RES * LCD_V_RES * sizeof(uint16_t), MALLOC_CAP_DMA);
-    if (fb) {
-        for (int i = 0; i < LCD_H_RES * LCD_V_RES; i++) {
-            fb[i] = 0xF800; /* RGB565 红色 */
+    while (1)
+    {
+        uint16_t *buf = heap_caps_malloc(LCD_WIDTH * 60 * sizeof(uint16_t), MALLOC_CAP_DMA);
+        if (!buf) {
+            ESP_LOGE("lcd_test", "Failed to alloc buffer");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
         }
-        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_lcd_panel, 0, 0, LCD_H_RES, LCD_V_RES, fb));
-        free(fb);
-        ESP_LOGI("main", "LCD filled with red");
+        uint16_t color = colors[idx];
+        // 第一个for循环使缓冲区填充60行同色数据，第二个for循环分批绘制到屏幕上。
+        for (int i = 0; i < LCD_WIDTH * 60; i++) {
+            buf[i] = color;
+        }
+        for (int y = 0; y < LCD_HEIGHT; y += 60) {
+            esp_lcd_panel_draw_bitmap(lcd_panel, 0, y, LCD_WIDTH, y + 60, buf);
+        }
+        free(buf);
+        idx = (idx + 1) % color_count;
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
+}
 
-    /* ── 配置 LED 引脚 ── */
-    ESP_LOGI("main", "Setting LED GPIOs to output");
+void app_main(void) {
+
+    ESP_LOGI("main", "TCA9554 driver initialized");
+    tca9554_init();
+
+    // 1. 配置引脚方向：将所有引脚设为输出 (向寄存器 0x03 写入 0x00)
+    ESP_LOGI("main", "Setting led GPIOs to output");
     tca9554_set_io_config(LED_RED_NUM, TCA9554_IO_OUTPUT);
     tca9554_set_io_config(LED_BLUE_NUM, TCA9554_IO_OUTPUT);
+    ESP_LOGI("main", "Setting led GPIOs to light");
+    tca9554_set_output_level(LED_RED_NUM, TCA9554_IO_HIGH);
+    tca9554_set_output_level(LED_BLUE_NUM, TCA9554_IO_HIGH);
+    vTaskDelay(1000);
 
-    /* ── 创建 LED 闪烁任务 ── */
-    ESP_LOGI("main", "Creating LED tasks");
+    ESP_LOGI("main", "Setting led GPIOs to dark");
+    tca9554_set_output_level(LED_RED_NUM, TCA9554_IO_LOW);
+    tca9554_set_output_level(LED_BLUE_NUM, TCA9554_IO_LOW);
+    vTaskDelay(1000);
+
+    ESP_LOGI("TASK", "redled_task created");
     xTaskCreatePinnedToCore(red_led, "redled_task", 2048, NULL, 1, NULL, 0);
+    ESP_LOGI("TASK", "blueled_task created");
     xTaskCreatePinnedToCore(blue_led, "blueled_task", 2048, NULL, 1, NULL, 0);
+
+    ESP_LOGI("main", "Initializing LCD");
+    ESP_ERROR_CHECK(lcd_board_init(&lcd_panel));
+
+    ESP_LOGI("TASK", "lcd_test_task created");
+    xTaskCreatePinnedToCore(lcd_test, "lcd_test_task", 4096, NULL, 2, NULL, 0);
 }

@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(\"E:/App/Esp/esp-idf/tools/idf-python/3.11.2/python.exe\" \"E:/App/Esp/esp-idf/frameworks/esp-idf-v5.5.3/tools/idf.py\" build)",
+      "Read(//e/App/Esp/esp-idf/frameworks/esp-idf-v5.5.3/**)",
+      "Read(//e/App/Esp/esp-idf/frameworks/esp-idf-v5.5.3/tools/**)",
+      "Bash(cmd.exe /c \"cd /d F:\\\\ESP-S3\\\\Jacktter && call E:\\\\App\\\\Esp\\\\esp-idf\\\\idf_cmd_init.bat esp-idf-v5.5.3 && idf.py build\")",
+      "Bash(IDF_PATH=\"E:/App/Esp/esp-idf/frameworks/esp-idf-v5.5.3\" env -u MSYSTEM \"E:/App/Esp/esp-idf/python_env/idf5.5_py3.11_env/Scripts/python.exe\" \"E:/App/Esp/esp-idf/frameworks/esp-idf-v5.5.3/tools/idf.py\" build)"
     ]
   }
 }

@@ -1,122 +1,104 @@
 #include "lcd_board.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_ili9341.h"
 #include "tca9554.h"
-#include "ili9341.h"
-
+#include "driver/spi_master.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/spi_master.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_log.h"
-#include "esp_check.h"
 
 static const char *TAG = "lcd_board";
 
-/* ── 引脚定义 ── */
-#define SPI_MOSI_IO         0       /* SDA */
-#define SPI_SCLK_IO         1       /* CLK */
-#define SPI_DC_IO           2       /* DC (命令/数据选择) */
+#define LCD_SPI_HOST    SPI2_HOST
+#define LCD_MOSI_GPIO   0
+#define LCD_SCLK_GPIO   1
+#define LCD_DC_GPIO     2
+#define LCD_BL_TCAGPIO  TCA9554_GPIO_NUM_1
+#define LCD_RST_TCAGPIO TCA9554_GPIO_NUM_2
+#define LCD_CS_TCAGPIO  TCA9554_GPIO_NUM_3
 
-#define TCA9554_PIN_BL      TCA9554_GPIO_NUM_1   /* 背光 CTRL */
-#define TCA9554_PIN_RST     TCA9554_GPIO_NUM_2   /* 复位 */
-#define TCA9554_PIN_CS      TCA9554_GPIO_NUM_3   /* SPI 片选 */
+#define LCD_PIXEL_CLOCK_HZ (40 * 1000 * 1000)
 
-/* ILI9341 面板尺寸 */
-#define LCD_H_RES            320
-#define LCD_V_RES            240
-
-/* 用于记录面板句柄，供背光控制等后续操作使用 */
-static esp_lcd_panel_handle_t s_panel = NULL;
-
+/*
+ * 初始化流程 (按顺序):
+ *   1. TCA9554 引脚配置   — 将 CS/RST/BL 设为输出并拉至初始电平
+ *   2. ILI9341 硬件复位   — RST 低 10ms → 高 120ms，满足数据手册时序
+ *   3. SPI 总线初始化     — MOSI=IO0, SCLK=IO1, 单向(无 MISO), DMA 缓冲 = 一帧+8B
+ *   4. Panel IO 创建      — D/C=IO2, SPI Mode 0, 40MHz, CS/RST 由 TCA9554 手动管理
+ *   5. 手工拉低 CS        — 驱动不管理 CS (cs_gpio_num=-1)，这里手工片选
+ *   6. Panel 设备创建     — 16bpp RGB565, 硬件复位在本步骤前已完成
+ *   7. 软件复位+初始化    — 发送软复位、出厂序列、开显示、开背光
+ *
+ * 设计要点:
+ *   CS/RST/BL 走 TCA9554 (I2C GPIO 扩展) 而非 ESP32 直连 GPIO —
+ *   三根线共享 I2C 总线，节省 ESP32 物理引脚，低速信号延迟可忽略。
+ *   MOSI/SCLK/DC 必须走直连 GPIO，因为它们是高速信号 (40MHz SPI)。
+ */
 esp_err_t lcd_board_init(esp_lcd_panel_handle_t *out_panel)
 {
-    esp_err_t ret;
+    /* ---- 1. 配置 TCA9554 引脚方向与初始电平 ---- */
+    tca9554_set_io_config(LCD_BL_TCAGPIO, TCA9554_IO_OUTPUT);
+    tca9554_set_io_config(LCD_RST_TCAGPIO, TCA9554_IO_OUTPUT);
+    tca9554_set_io_config(LCD_CS_TCAGPIO, TCA9554_IO_OUTPUT);
 
-    /* ── 1. 通过 TCA9554 配置控制引脚 ── */
-    ESP_LOGI(TAG, "Configuring TCA9554 control pins");
-    ESP_RETURN_ON_ERROR(tca9554_set_io_config(TCA9554_PIN_BL, TCA9554_IO_OUTPUT), TAG, "cfg BL");
-    ESP_RETURN_ON_ERROR(tca9554_set_io_config(TCA9554_PIN_RST, TCA9554_IO_OUTPUT), TAG, "cfg RST");
-    ESP_RETURN_ON_ERROR(tca9554_set_io_config(TCA9554_PIN_CS, TCA9554_IO_OUTPUT), TAG, "cfg CS");
+    tca9554_set_output_level(LCD_CS_TCAGPIO, TCA9554_IO_HIGH);  // CS 高 → 未选中
+    tca9554_set_output_level(LCD_RST_TCAGPIO, TCA9554_IO_LOW);  // RST 低 → 复位
+    tca9554_set_output_level(LCD_BL_TCAGPIO, TCA9554_IO_LOW);   // BL 低 → 背光灭
 
-    /* ── 2. CS 拉低 (单 SPI 设备的常规做法，常选通) ── */
-    ESP_RETURN_ON_ERROR(tca9554_set_output_level(TCA9554_PIN_CS, TCA9554_IO_LOW), TAG, "cs low");
-
-    /* ── 3. 硬件复位 LCD (RST: 高 → 低 → 高) ── */
-    ESP_LOGI(TAG, "Resetting LCD panel");
-    ESP_RETURN_ON_ERROR(tca9554_set_output_level(TCA9554_PIN_RST, TCA9554_IO_HIGH), TAG, "rst high");
+    /* ---- 2. ILI9341 硬件复位 (≥10ms 低 → ≥120ms 高) ---- */
     vTaskDelay(pdMS_TO_TICKS(10));
-    ESP_RETURN_ON_ERROR(tca9554_set_output_level(TCA9554_PIN_RST, TCA9554_IO_LOW), TAG, "rst low");
-    vTaskDelay(pdMS_TO_TICKS(10));
-    ESP_RETURN_ON_ERROR(tca9554_set_output_level(TCA9554_PIN_RST, TCA9554_IO_HIGH), TAG, "rst high");
-    vTaskDelay(pdMS_TO_TICKS(120));
+    tca9554_set_output_level(LCD_RST_TCAGPIO, TCA9554_IO_HIGH);
+    vTaskDelay(pdMS_TO_TICKS(120));  // 等待内部电源稳定
 
-    /* ── 4. 初始化 SPI 总线 ── */
-    ESP_LOGI(TAG, "Initializing SPI bus (MOSI=%d, SCLK=%d, DC=%d)", SPI_MOSI_IO, SPI_SCLK_IO, SPI_DC_IO);
+    /* ---- 3. SPI 总线初始化 ---- */
     spi_bus_config_t bus_cfg = {
-        .mosi_io_num = SPI_MOSI_IO,
-        .miso_io_num = -1,
-        .sclk_io_num = SPI_SCLK_IO,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_H_RES * LCD_V_RES * 2,
+        .mosi_io_num = LCD_MOSI_GPIO,       // IO0
+        .miso_io_num = -1,                  // 写多读少 → 禁用 MISO
+        .sclk_io_num = LCD_SCLK_GPIO,       // IO1
+        .quadwp_io_num = -1,                // 未使用 QSPI
+        .quadhd_io_num = -1,                // 未使用 QSPI
+        .max_transfer_sz = 320 * 240 * 2 + 8, // 一帧像素 + 指令/参数开销
     };
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO), TAG, "spi bus init");
+    ESP_ERROR_CHECK(spi_bus_initialize(LCD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
-    /* ── 5. 创建 SPI 面板 IO (CS 由 TCA9554 控制，这里传 -1) ── */
+    /* ---- 4. 创建 Panel IO (SPI 传输协议层) ---- */
+    esp_lcd_panel_io_spi_config_t io_cfg = {
+        .cs_gpio_num = -1,                   // CS 在 TCA9554 上，驱动不管理
+        .dc_gpio_num = LCD_DC_GPIO,          // D/C=IO2, 高速信号需直连 GPIO
+        .spi_mode = 0,                       // CPOL=0 CPHA=0, 符合 ILI9341 要求
+        .pclk_hz = LCD_PIXEL_CLOCK_HZ,       // SPI 时钟 40MHz
+        .trans_queue_depth = 10,             // 事务队列深度
+        .lcd_cmd_bits = 8,                   // ILI9341 命令字长 8 位
+        .lcd_param_bits = 8,                 // ILI9341 参数字长 8 位
+    };
     esp_lcd_panel_io_handle_t io_handle = NULL;
-    esp_lcd_panel_io_spi_config_t io_config = {
-        .dc_gpio_num = SPI_DC_IO,
-        .cs_gpio_num = -1,          /* 不控制 CS，已由 TCA9554 常低 */
-        .pclk_hz = 40 * 1000 * 1000,
-        .spi_mode = 0,
-        .trans_queue_depth = 10,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST, &io_cfg, &io_handle));
+
+    /* ---- 5. 手工片选 ILI9341 ---- */
+    tca9554_set_output_level(LCD_CS_TCAGPIO, TCA9554_IO_LOW);
+
+    /* ---- 6. 创建 ILI9341 Panel 设备 ---- */
+    esp_lcd_panel_dev_config_t panel_cfg = {
+        .reset_gpio_num = -1,                     // 硬件复位已通过 TCA9554 完成
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB, // R 在 MSB
+        .bits_per_pixel = 16,                     // RGB565, 每像素 2 字节
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_config, &io_handle), TAG, "panel io");
+    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io_handle, &panel_cfg, out_panel));
 
-    /* ── 6. 创建 ILI9341 面板 ── */
-    esp_lcd_panel_dev_config_t panel_config = {
-        .reset_gpio_num = -1,       /* 不控制 RST，已由 TCA9554 复位 */
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
-        .bits_per_pixel = 16,       /* RGB565 */
-    };
-    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_ili9341(io_handle, &panel_config, &s_panel), err, TAG, "new panel");
+    /* ---- 7. 软件复位 → 出厂初始化序列 → 开显示 → 开背光 ---- */
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(*out_panel));      // 软复位命令 0x01
+    ESP_ERROR_CHECK(esp_lcd_panel_init(*out_panel));       // 发送出厂序列 (sleep out, 像素格式, 伽马曲线等)
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(*out_panel, true)); // Display ON (0x29)
 
-    /* ── 7. 初始化面板 (发送 ILI9341 初始化序列) ── */
-    ESP_LOGI(TAG, "Initializing ILI9341 panel");
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(s_panel), err, TAG, "panel init");
+    lcd_board_set_backlight(true);  // TCA9554 P1 高 → 背光亮
 
-    /* ── 8. 点亮屏幕 ── */
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), err, TAG, "disp on");
-
-    /* ── 9. 打开背光 (非致命，失败不滚回面板) ── */
-    ret = tca9554_set_output_level(TCA9554_PIN_BL, TCA9554_IO_HIGH);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to turn on backlight, panel may be working without backlight");
-    }
-
-    *out_panel = s_panel;
-    ESP_LOGI(TAG, "LCD board initialized successfully");
+    ESP_LOGI(TAG, "LCD board initialized");
     return ESP_OK;
-
-err:
-    if (io_handle) {
-        esp_lcd_panel_io_del(io_handle);
-    }
-    if (s_panel) {
-        esp_lcd_panel_del(s_panel);
-        s_panel = NULL;
-    }
-    spi_bus_free(SPI2_HOST);
-    return ret;
 }
 
-esp_err_t lcd_board_set_backlight(uint8_t percent)
+esp_err_t lcd_board_set_backlight(bool on)
 {
-    if (percent > 0) {
-        return tca9554_set_output_level(TCA9554_PIN_BL, TCA9554_IO_HIGH);
-    } else {
-        return tca9554_set_output_level(TCA9554_PIN_BL, TCA9554_IO_LOW);
-    }
+    return tca9554_set_output_level(LCD_BL_TCAGPIO, on ? TCA9554_IO_HIGH : TCA9554_IO_LOW);
 }
