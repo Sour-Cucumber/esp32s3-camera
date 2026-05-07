@@ -42,23 +42,26 @@ static void lcd_test(void *param)
     int color_count = sizeof(colors) / sizeof(colors[0]);
     int idx = 0;
 
+    uint16_t *buf = heap_caps_malloc(LCD_WIDTH * 60 * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!buf) {
+        ESP_LOGE("lcd_test", "Failed to alloc buffer");
+        vTaskDelete(NULL);
+        return;
+    }
+
     while (1)
     {
-        uint16_t *buf = heap_caps_malloc(LCD_WIDTH * 60 * sizeof(uint16_t), MALLOC_CAP_DMA);
-        if (!buf) {
-            ESP_LOGE("lcd_test", "Failed to alloc buffer");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-        uint16_t color = colors[idx];
-        // 第一个for循环使缓冲区填充60行同色数据，第二个for循环分批绘制到屏幕上。
+        // 提前把颜色值转成大端序 (ILI9341 期望高字节在前)
+        uint16_t color_le = colors[idx];
+        uint8_t *c = (uint8_t *)&color_le;
+        uint16_t color_be = ((uint16_t)c[0] << 8) | c[1];
+
         for (int i = 0; i < LCD_WIDTH * 60; i++) {
-            buf[i] = color;
+            buf[i] = color_be;
         }
         for (int y = 0; y < LCD_HEIGHT; y += 60) {
             esp_lcd_panel_draw_bitmap(lcd_panel, 0, y, LCD_WIDTH, y + 60, buf);
         }
-        free(buf);
         idx = (idx + 1) % color_count;
         vTaskDelay(pdMS_TO_TICKS(2000));
     }

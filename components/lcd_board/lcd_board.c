@@ -82,7 +82,7 @@ esp_err_t lcd_board_init(esp_lcd_panel_handle_t *out_panel)
     /* ---- 6. 创建 ILI9341 Panel 设备 ---- */
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = -1,                     // 硬件复位已通过 TCA9554 完成
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB, // R 在 MSB
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
         .bits_per_pixel = 16,                     // RGB565, 每像素 2 字节
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io_handle, &panel_cfg, out_panel));
