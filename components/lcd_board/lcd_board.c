@@ -39,18 +39,18 @@ static const char *TAG = "lcd_board";
 esp_err_t lcd_board_init(esp_lcd_panel_handle_t *out_panel)
 {
     /* ---- 1. 配置 TCA9554 引脚方向与初始电平 ---- */
-    tca9554_set_io_config(LCD_BL_TCAGPIO, TCA9554_IO_OUTPUT);
-    tca9554_set_io_config(LCD_RST_TCAGPIO, TCA9554_IO_OUTPUT);
-    tca9554_set_io_config(LCD_CS_TCAGPIO, TCA9554_IO_OUTPUT);
+    ESP_ERROR_CHECK(tca9554_set_io_config(LCD_BL_TCAGPIO, TCA9554_IO_OUTPUT));
+    ESP_ERROR_CHECK(tca9554_set_io_config(LCD_RST_TCAGPIO, TCA9554_IO_OUTPUT));
+    ESP_ERROR_CHECK(tca9554_set_io_config(LCD_CS_TCAGPIO, TCA9554_IO_OUTPUT));
 
-    tca9554_set_output_level(LCD_CS_TCAGPIO, TCA9554_IO_HIGH);  // CS 高 → 未选中
-    tca9554_set_output_level(LCD_RST_TCAGPIO, TCA9554_IO_LOW);  // RST 低 → 复位
-    tca9554_set_output_level(LCD_BL_TCAGPIO, TCA9554_IO_LOW);   // BL 低 → 背光灭
+    ESP_ERROR_CHECK(tca9554_set_output_level(LCD_CS_TCAGPIO, TCA9554_IO_HIGH));
+    ESP_ERROR_CHECK(tca9554_set_output_level(LCD_RST_TCAGPIO, TCA9554_IO_LOW));
+    ESP_ERROR_CHECK(tca9554_set_output_level(LCD_BL_TCAGPIO, TCA9554_IO_LOW));
 
     /* ---- 2. ILI9341 硬件复位 (≥10ms 低 → ≥120ms 高) ---- */
     vTaskDelay(pdMS_TO_TICKS(10));
-    tca9554_set_output_level(LCD_RST_TCAGPIO, TCA9554_IO_HIGH);
-    vTaskDelay(pdMS_TO_TICKS(120));  // 等待内部电源稳定
+    ESP_ERROR_CHECK(tca9554_set_output_level(LCD_RST_TCAGPIO, TCA9554_IO_HIGH));
+    vTaskDelay(pdMS_TO_TICKS(120));
 
     /* ---- 3. SPI 总线初始化 ---- */
     spi_bus_config_t bus_cfg = {
@@ -77,7 +77,7 @@ esp_err_t lcd_board_init(esp_lcd_panel_handle_t *out_panel)
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST, &io_cfg, &io_handle));
 
     /* ---- 5. 手工片选 ILI9341 ---- */
-    tca9554_set_output_level(LCD_CS_TCAGPIO, TCA9554_IO_LOW);
+    ESP_ERROR_CHECK(tca9554_set_output_level(LCD_CS_TCAGPIO, TCA9554_IO_LOW));
 
     /* ---- 6. 创建 ILI9341 Panel 设备 ---- */
     esp_lcd_panel_dev_config_t panel_cfg = {

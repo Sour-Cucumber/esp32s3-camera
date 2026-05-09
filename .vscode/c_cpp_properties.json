@@ -3,7 +3,7 @@
     {
       "name": "ESP-IDF",
       "compilerPath": "E:/App/Esp/esp-idf/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc.exe",
-      "compileCommands": "f:/ESP-S3/Jacktter/build/compile_commands.json",
+      "compileCommands": "f:/ESP-S3/previous_version/esp32s3-camera/build/compile_commands.json",
       "includePath": [
         "${workspaceFolder}/**",
         "${workspaceFolder}/managed_components/**",
