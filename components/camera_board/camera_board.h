@@ -1,6 +1,10 @@
 #ifndef __CAMERA_BOARD_H
 #define __CAMERA_BOARD_H
 
+#include "driver/gpio.h"
+#include "esp_err.h"
+#include "esp_lcd_types.h"
+
 #define CAM_PIN_PWDN                -1
 #define CAM_PIN_RESET               -1
 #define CAM_PIN_XCLK                GPIO_NUM_40
@@ -19,10 +23,15 @@
 #define CAM_PIN_HREF                GPIO_NUM_38
 #define CAM_PIN_PCLK                GPIO_NUM_11
 
+typedef enum {
+    RGB565,
+    JPEG
+} camera_format_t;
+
 /*
  * brif: Initialize the camera
  */
-esp_err_t camera_init();
+esp_err_t camera_init(camera_format_t format);
 
 /*
  * brif: Capture a frame from the camera and draw it on the LCD
@@ -31,4 +40,14 @@ esp_err_t camera_init();
  */
 esp_err_t camera_capture(esp_lcd_panel_handle_t panel, int x0, int y0, int x1, int y1);
 
-#endif 
+/*
+ * brif: Save the current camera frame as a JPEG file to the SD card
+ */
+esp_err_t camera_save_jpeg_to_sdcard(void);
+
+/*
+ * brif: Save the current camera frame as a BMP24 file to the SD card
+ */
+esp_err_t camera_save_bmp_to_sdcard(void);
+
+#endif

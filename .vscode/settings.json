@@ -1,15 +1,5 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPathWin": "E:/App/Esp/esp-idf/frameworks/esp-idf-v5.5.3/",
-  "idf.pythonInstallPath": "E:\\App\\Esp\\esp-idf\\tools\\idf-python\\3.11.2\\python.exe",
-  "idf.espAdfPathWin": "E:\\App\\Esp\\esp-adf",
-  "idf.openOcdConfigs": [
-    "board/esp32s3-builtin.cfg"
-  ],
-  "idf.toolsPathWin": "E:\\App\\Esp\\esp-idf",
-  "idf.customExtraVars": {
-    "IDF_TARGET": "esp32s3"
-  },
-  "idf.portWin": "COM3",
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.portWin": "COM3"
 }
