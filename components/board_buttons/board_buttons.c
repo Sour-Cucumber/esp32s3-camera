@@ -28,7 +28,7 @@ esp_err_t board_buttons_init(void)
     };
 
     /* ESP32-S3-Korvo2 6 个按键的分压值 (mV) */
-    const uint16_t vol[BOARD_BTN_MAX] = {380, 820, 1180, 1570, 1980, 2410};
+    const uint16_t vol[BOARD_BTN_MAX] = {2410, 1980, 1570, 1180, 820, 380};
 
     for (size_t i = 0; i < BOARD_BTN_MAX; i++) {
         adc_cfg.button_index = i;

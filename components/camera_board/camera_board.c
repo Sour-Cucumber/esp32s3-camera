@@ -137,9 +137,17 @@ esp_err_t camera_save_jpeg_to_sdcard(void) {
         return err;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(100));     // 等待摄像头稳定
+    // 2. 丢弃前 3 帧让 AWB/AEC/AGC 收敛，否则 JPEG 画面会偏绿
+    camera_fb_t *drop_fb = NULL;
+    for (int skip = 0; skip < 3; skip++) {
+        drop_fb = esp_camera_fb_get();
+        if (drop_fb) {
+            esp_camera_fb_return(drop_fb);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 
-    // 2. 抓取 JPEG 帧，带重试和完整性校验
+    // 3. 抓取 JPEG 帧，带重试和完整性校验
     camera_fb_t * fb = NULL;
     for (int retry = 0; retry < CAMERA_JPEG_RETRY_MAX; retry++) {
         fb = esp_camera_fb_get();
@@ -165,7 +173,7 @@ esp_err_t camera_save_jpeg_to_sdcard(void) {
         goto restore_rgb565;
     }
 
-    // 3. 写入 SD 卡（JPEG 数据已由摄像头硬件编码，直接存即可）
+    // 4. 写入 SD 卡（JPEG 数据已由摄像头硬件编码，直接存即可）
     static int img_count = 0;
     char path[64];
     snprintf(path, sizeof(path), "/sdcard/img_%d.jpg", img_count++);
