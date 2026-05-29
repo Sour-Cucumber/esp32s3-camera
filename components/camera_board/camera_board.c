@@ -1,6 +1,7 @@
 #include "esp_camera.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "lcd_board.h"
 #include "camera_board.h"
@@ -9,6 +10,7 @@
 #include "sdio.h"
 
 static const char *TAG = "camera_board";
+static SemaphoreHandle_t s_camera_mutex = NULL;
 
 #define CAMERA_XCLK_FREQ_HZ    (20 * 1000 * 1000)
 #define CAMERA_JPEG_QUALITY    2
@@ -60,6 +62,14 @@ static bool camera_frame_is_complete_jpeg(const camera_fb_t *fb)
 }
 
 esp_err_t camera_init(camera_format_t format) {
+    if (s_camera_mutex == NULL) {
+        s_camera_mutex = xSemaphoreCreateMutex();
+        if (s_camera_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create camera mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     switch (format) {
         case RGB565:
             // LCD 预览模式：双缓冲 + 取最新帧，保证画面流畅
@@ -94,28 +104,36 @@ esp_err_t camera_init(camera_format_t format) {
 }
 
 esp_err_t camera_capture(esp_lcd_panel_handle_t panel, int x0, int y0, int x1, int y1){
-    //acquire a frame
+    // 非阻塞拿锁：若摄像头正被 JPEG 保存占用，跳过本帧
+    if (xSemaphoreTake(s_camera_mutex, 0) != pdTRUE) {
+        return ESP_FAIL;
+    }
+
     camera_fb_t * fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Camera Capture Failed");
+        xSemaphoreGive(s_camera_mutex);
         return ESP_FAIL;
     }
-    //将摄像头采集到的帧数据绘制到 LCD 上。
+
     esp_lcd_panel_draw_bitmap(panel, x0, y0, x1, y1, fb->buf);
-  
-    //return the frame buffer back to the driver for reuse
     esp_camera_fb_return(fb);
+    xSemaphoreGive(s_camera_mutex);
     return ESP_OK;
 }
 
 // 保存 JPEG 照片到 SD 卡。需要将摄像头从 RGB565 临时切换到 JPEG 模式再切回，
 // 切换期间 LCD 会短暂黑屏（约 200~400ms）。文件小（10~30KB），适合需要节省 SD 卡空间的场景。
 esp_err_t camera_save_jpeg_to_sdcard(void) {
+    // 阻塞等待摄像头空闲（app_main capture loop 会跳过）
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+
     // 1. 反初始化 RGB565 模式，重新以 JPEG 模式初始化
     esp_camera_deinit();
     esp_err_t err = camera_init(JPEG);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to reinitialize camera in JPEG mode");
+        xSemaphoreGive(s_camera_mutex);
         return err;
     }
 
@@ -167,8 +185,10 @@ restore_rgb565:
     esp_err_t restore_err = camera_init(RGB565);
     if (restore_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to reinitialize camera in RGB565 mode");
+        xSemaphoreGive(s_camera_mutex);
         return restore_err;
     }
+    xSemaphoreGive(s_camera_mutex);
     return err;
 }
 
@@ -209,10 +229,13 @@ static void rgb565be_to_bgr888(const uint8_t *src, uint8_t bgr[3])
 // 抓取当前帧后在内存中转换为 BMP24 格式再写入 SD 卡。
 esp_err_t camera_save_bmp_to_sdcard(void)
 {
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+
     // 1. 抓取当前 RGB565 帧
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Camera capture failed");
+        xSemaphoreGive(s_camera_mutex);
         return ESP_FAIL;
     }
 
@@ -228,6 +251,7 @@ esp_err_t camera_save_bmp_to_sdcard(void)
     if (!bmp) {
         ESP_LOGE(TAG, "Malloc BMP buffer failed");
         esp_camera_fb_return(fb);
+        xSemaphoreGive(s_camera_mutex);
         return ESP_FAIL;
     }
     memset(bmp, 0, file_size);
@@ -274,9 +298,11 @@ esp_err_t camera_save_bmp_to_sdcard(void)
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write BMP to SD card");
+        xSemaphoreGive(s_camera_mutex);
         return err;
     }
 
     ESP_LOGI(TAG, "BMP saved: %s (%d bytes)", path, file_size);
+    xSemaphoreGive(s_camera_mutex);
     return ESP_OK;
 }

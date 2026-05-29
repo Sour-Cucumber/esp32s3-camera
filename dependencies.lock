@@ -1,4 +1,18 @@
 dependencies:
+  espressif/button:
+    component_hash: d0afa32f0e50d60bc0c6fc23f7eea98adc6b02cfe70b590bc52c23c506745287
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 4.1.6
   espressif/cmake_utilities:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
@@ -52,8 +66,9 @@ dependencies:
       type: idf
     version: 5.5.3
 direct_dependencies:
+- espressif/button
 - espressif/esp32-camera
 - espressif/esp_lcd_ili9341
-manifest_hash: 7c90e137400a83533578667e81fc9a9149277c1b66ab7ae9646f286b93b56c3d
+manifest_hash: 30371f9673ce17f9229ecf7ecc31c6f04ee88ffdfeb33b0669f1fd8c5fa407a8
 target: esp32s3
 version: 2.0.0
